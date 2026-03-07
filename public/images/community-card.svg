@@ -1,0 +1,8 @@
+<svg width="800" height="520" viewBox="0 0 800 520" fill="none" xmlns="http://www.w3.org/2000/svg">
+  <rect width="800" height="520" rx="24" fill="#F0FDFA"/>
+  <circle cx="190" cy="210" r="80" fill="#A7F3D0"/>
+  <circle cx="400" cy="170" r="70" fill="#BFDBFE"/>
+  <circle cx="590" cy="220" r="78" fill="#FDE68A"/>
+  <rect x="120" y="300" width="560" height="130" rx="18" fill="white"/>
+  <text x="180" y="380" fill="#0F172A" font-size="44" font-family="Arial" font-weight="700">Neighbors + Campus + Apt</text>
+</svg>

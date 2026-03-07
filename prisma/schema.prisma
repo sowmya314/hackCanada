@@ -1,0 +1,126 @@
+generator client {
+  provider = "prisma-client-js"
+}
+
+datasource db {
+  provider = "sqlite"
+  url      = env("DATABASE_URL")
+}
+
+enum TripStatus {
+  OPEN
+  COMPLETED
+}
+
+model User {
+  id                String             @id @default(cuid())
+  email             String             @unique
+  passwordHash      String
+  name              String
+  homeLat           Float?
+  homeLng           Float?
+  activeCommunityId String?
+  createdAt         DateTime           @default(now())
+  memberships       CommunityMember[]
+  tripsRun          Trip[]             @relation("TripRunner")
+  orders            Order[]
+  ratingsGiven      TripRating[]       @relation("RatingAuthor")
+  credits           StoreCreditLedger[]
+  activeCommunity   Community?         @relation("ActiveCommunity", fields: [activeCommunityId], references: [id])
+}
+
+model Community {
+  id          String            @id @default(cuid())
+  name        String            @unique
+  description String
+  latitude    Float
+  longitude   Float
+  createdAt   DateTime          @default(now())
+  members     CommunityMember[]
+  trips       Trip[]
+  activeUsers User[]            @relation("ActiveCommunity")
+}
+
+model CommunityMember {
+  id          String    @id @default(cuid())
+  userId      String
+  communityId String
+  joinedAt    DateTime  @default(now())
+  user        User      @relation(fields: [userId], references: [id])
+  community   Community @relation(fields: [communityId], references: [id])
+
+  @@unique([userId, communityId])
+}
+
+model Trip {
+  id             String       @id @default(cuid())
+  communityId    String
+  runnerId       String
+  dayOfWeek      String
+  pickupLocation String
+  pickupDate     DateTime?
+  status         TripStatus   @default(OPEN)
+  createdAt      DateTime     @default(now())
+  community      Community    @relation(fields: [communityId], references: [id])
+  runner         User         @relation("TripRunner", fields: [runnerId], references: [id])
+  orders         Order[]
+  ratings        TripRating[]
+}
+
+model Order {
+  id         String      @id @default(cuid())
+  tripId      String
+  userId      String
+  notes       String?
+  createdAt   DateTime    @default(now())
+  trip        Trip        @relation(fields: [tripId], references: [id])
+  user        User        @relation(fields: [userId], references: [id])
+  items       OrderLine[]
+}
+
+model OrderLine {
+  id            String     @id @default(cuid())
+  orderId        String
+  costcoItemId   String
+  claimedUnits   Int
+  createdAt      DateTime   @default(now())
+  order          Order      @relation(fields: [orderId], references: [id])
+  costcoItem     CostcoItem @relation(fields: [costcoItemId], references: [id])
+}
+
+model TripRating {
+  id        String   @id @default(cuid())
+  tripId     String
+  authorId   String
+  score      Int
+  comment    String?
+  createdAt  DateTime @default(now())
+  trip       Trip     @relation(fields: [tripId], references: [id])
+  author     User     @relation("RatingAuthor", fields: [authorId], references: [id])
+
+  @@unique([tripId, authorId])
+}
+
+model CostcoItem {
+  id         String      @id @default(cuid())
+  category   String
+  itemName   String
+  packCount  Int
+  unitType   String
+  rawLabel   String
+  createdAt  DateTime    @default(now())
+  orderLines OrderLine[]
+
+  @@index([itemName])
+}
+
+model StoreCreditLedger {
+  id         String   @id @default(cuid())
+  userId     String
+  amount     Float
+  reason     String
+  createdAt  DateTime @default(now())
+  user       User     @relation(fields: [userId], references: [id])
+
+  @@index([userId])
+}

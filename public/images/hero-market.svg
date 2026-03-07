@@ -1,0 +1,11 @@
+<svg width="1200" height="720" viewBox="0 0 1200 720" fill="none" xmlns="http://www.w3.org/2000/svg">
+  <rect width="1200" height="720" rx="36" fill="#EAF7FF"/>
+  <circle cx="1050" cy="90" r="180" fill="#D1FAE5"/>
+  <circle cx="120" cy="620" r="220" fill="#DBEAFE"/>
+  <rect x="160" y="180" width="880" height="380" rx="24" fill="white" stroke="#BFDBFE" stroke-width="4"/>
+  <rect x="220" y="250" width="260" height="220" rx="18" fill="#FEF3C7"/>
+  <rect x="500" y="250" width="260" height="220" rx="18" fill="#D1FAE5"/>
+  <rect x="780" y="250" width="260" height="220" rx="18" fill="#E0E7FF"/>
+  <text x="220" y="150" fill="#0F172A" font-size="56" font-family="Arial" font-weight="700">BulkBridge</text>
+  <text x="220" y="210" fill="#334155" font-size="28" font-family="Arial">Community Costco trips and bulk splits</text>
+</svg>
