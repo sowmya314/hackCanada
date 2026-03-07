@@ -10,7 +10,9 @@ import {
   View
 } from "react-native";
 import { StatusBar } from "expo-status-bar";
+import { Audio } from "expo-av";
 import * as Location from "expo-location";
+import * as FileSystem from "expo-file-system/legacy";
 import { communities, fakeUsers, groceryItems, seededTrips, type Trip } from "./src/data/mock";
 import { generatePantrySuggestions } from "./src/lib/pantry";
 
@@ -18,17 +20,58 @@ type Tab = "shop" | "trips" | "pantry" | "profile";
 
 type CartLine = { itemId: string; claimedUnits: number };
 
-const shoppingGoals = ["Weekly Restock", "Meal Prep", "Cleaning", "Party", "Campus Essentials"];
-const categories = ["All", "Fresh", "Drink & Water", "Dairy", "Bakery", "Sweets", "Cleaners", "Meat"];
-
 const currentUserId = "u1";
 const API_BASE_URL =
   typeof process !== "undefined" ? process.env.EXPO_PUBLIC_API_BASE_URL : undefined;
 
+function normalizeRecipeCount(
+  recipes: Array<{ title: string; missingIngredients: string[] }>,
+  pantryItems: string[]
+) {
+  const starters = [...recipes];
+  const fallbackTitles = [
+    "Quick Pantry Wrap",
+    "Bulk Bowl Special",
+    "Neighborhood Pasta Mix",
+    "Campus Protein Plate",
+    "One-Pan Veggie Dinner",
+    "Simple Soup Combo",
+    "Stir Fry in 20",
+    "Breakfast for Dinner"
+  ];
+
+  let idx = 0;
+  while (starters.length < 8 && idx < fallbackTitles.length) {
+    starters.push({
+      title: fallbackTitles[idx],
+      missingIngredients: pantryItems.length
+        ? ["olive oil", "garlic"].filter((item) => !pantryItems.some((p) => p.includes(item)))
+        : ["olive oil", "garlic", "onion"]
+    });
+    idx += 1;
+  }
+  return starters;
+}
+
+function productEmoji(category: string, name: string) {
+  const c = category.toLowerCase();
+  const n = name.toLowerCase();
+  if (n.includes("avocado")) return "🥑";
+  if (n.includes("beet")) return "🧅";
+  if (n.includes("carrot")) return "🥕";
+  if (c.includes("drink") || n.includes("water")) return "🥤";
+  if (c.includes("bakery")) return "🥐";
+  if (c.includes("dairy") || n.includes("milk")) return "🥛";
+  if (c.includes("clean")) return "🧴";
+  if (c.includes("snack") || c.includes("sweet")) return "🍪";
+  if (c.includes("meat")) return "🍖";
+  if (c.includes("produce")) return "🥦";
+  return "🛒";
+}
+
 export default function App() {
   const [tab, setTab] = useState<Tab>("shop");
-  const [goal, setGoal] = useState(shoppingGoals[0]);
-  const [category, setCategory] = useState(categories[0]);
+  const [category, setCategory] = useState("All");
   const [search, setSearch] = useState("");
   const [trips, setTrips] = useState<Trip[]>(seededTrips);
   const [joinedCommunityIds, setJoinedCommunityIds] = useState<string[]>(["c1"]);
@@ -43,16 +86,22 @@ export default function App() {
   const [newTripPickup, setNewTripPickup] = useState("");
   const [transcript, setTranscript] = useState("");
   const [pantryResult, setPantryResult] = useState<Awaited<ReturnType<typeof generatePantrySuggestions>> | null>(null);
+  const [showAllRecipes, setShowAllRecipes] = useState(false);
+  const [isRecording, setIsRecording] = useState(false);
+  const [recording, setRecording] = useState<Audio.Recording | null>(null);
+
+  const categoryOptions = useMemo(() => {
+    const unique = Array.from(new Set(groceryItems.map((item) => item.category)));
+    return ["All", ...unique.slice(0, 14)];
+  }, []);
 
   const visibleItems = useMemo(() => {
     return groceryItems.filter((item) => {
       const catMatch = category === "All" || item.category === category;
       const searchMatch = !search || item.name.toLowerCase().includes(search.toLowerCase());
-      const goalMatch =
-        goal !== "Cleaning" || item.category === "Cleaners" || item.category === "Drink & Water";
-      return catMatch && searchMatch && goalMatch;
-    });
-  }, [category, search, goal]);
+      return catMatch && searchMatch;
+    }).slice(0, 80);
+  }, [category, search]);
 
   const tripsForActiveCommunity = useMemo(
     () => trips.filter((trip) => trip.communityId === activeCommunityId),
@@ -91,6 +140,83 @@ export default function App() {
     setSelectedTripId(first?.id ?? "");
   }, [activeCommunityId, trips]);
 
+  async function startRecording() {
+    try {
+      await Audio.requestPermissionsAsync();
+      await Audio.setAudioModeAsync({
+        allowsRecordingIOS: true,
+        playsInSilentModeIOS: true
+      });
+
+      const rec = new Audio.Recording();
+      await rec.prepareToRecordAsync(Audio.RecordingOptionsPresets.HIGH_QUALITY);
+      await rec.startAsync();
+      setRecording(rec);
+      setIsRecording(true);
+    } catch {
+      Alert.alert("Recording error", "Could not start recording.");
+    }
+  }
+
+  async function stopRecordingAndTranscribe() {
+    if (!recording) return;
+    try {
+      await recording.stopAndUnloadAsync();
+      const uri = recording.getURI();
+      setRecording(null);
+      setIsRecording(false);
+
+      if (!uri) {
+        Alert.alert("Voice input", "No recording file found.");
+        return;
+      }
+
+      const text = await transcribeWithGemini(uri);
+      if (!text) {
+        Alert.alert(
+          "Speech-to-text unavailable",
+          "Could not transcribe audio. Check EXPO_PUBLIC_API_BASE_URL and backend GEMINI_API_KEY."
+        );
+        return;
+      }
+
+      setTranscript(text);
+      setTab("pantry");
+      const ai = await generatePantrySuggestions(text, API_BASE_URL);
+      setPantryResult({
+        ...ai,
+        suggestedRecipes: normalizeRecipeCount(ai.suggestedRecipes, ai.pantryItems)
+      });
+      setShowAllRecipes(false);
+    } catch {
+      Alert.alert("Voice input", "Something went wrong while transcribing.");
+    }
+  }
+  async function transcribeWithGemini(uri: string): Promise<string | null> {
+    if (!API_BASE_URL) return null;
+
+    try {
+      const audioBase64 = await FileSystem.readAsStringAsync(uri, {
+        encoding: FileSystem.EncodingType.Base64
+      });
+
+      const response = await fetch(`${API_BASE_URL}/api/pantry/transcribe`, {
+        method: "POST",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify({
+          audioBase64,
+          mimeType: "audio/m4a"
+        })
+      });
+
+      if (!response.ok) return null;
+      const data = await response.json();
+      return data?.text?.trim() || null;
+    } catch {
+      return null;
+    }
+  }
+
   function addToCart(itemId: string) {
     const item = groceryItems.find((i) => i.id === itemId);
     if (!item) return;
@@ -105,6 +231,23 @@ export default function App() {
         );
       }
       return [...prev, { itemId, claimedUnits: 1 }];
+    });
+  }
+
+  function getItemQty(itemId: string) {
+    return cart.find((line) => line.itemId === itemId)?.claimedUnits ?? 0;
+  }
+
+  function decreaseQty(itemId: string) {
+    setCart((prev) => {
+      const line = prev.find((entry) => entry.itemId === itemId);
+      if (!line) return prev;
+      if (line.claimedUnits <= 1) {
+        return prev.filter((entry) => entry.itemId !== itemId);
+      }
+      return prev.map((entry) =>
+        entry.itemId === itemId ? { ...entry, claimedUnits: entry.claimedUnits - 1 } : entry
+      );
     });
   }
 
@@ -196,44 +339,36 @@ export default function App() {
       return;
     }
     const res = await generatePantrySuggestions(transcript, API_BASE_URL);
-    setPantryResult(res);
+    setPantryResult({
+      ...res,
+      suggestedRecipes: normalizeRecipeCount(res.suggestedRecipes, res.pantryItems)
+    });
+    setShowAllRecipes(false);
   }
 
   function renderShop() {
     return (
       <>
         <View style={styles.hero}>
-          <TextInput
-            value={search}
-            onChangeText={setSearch}
-            placeholder='Search for "Grocery"'
-            placeholderTextColor="#7a8c8f"
-            style={styles.searchInput}
-          />
+          <View style={styles.searchRow}>
+            <TextInput
+              value={search}
+              onChangeText={setSearch}
+              placeholder='Search for "Grocery"'
+              placeholderTextColor="#7a8c8f"
+              style={styles.searchInput}
+            />
+          </View>
           <Text style={styles.locationLabel}>Current Location</Text>
           <Text style={styles.locationValue}>{locationLabel} ↗</Text>
-          <ScrollView horizontal showsHorizontalScrollIndicator={false} style={{ marginTop: 10 }}>
-            {shoppingGoals.map((g) => (
-              <TouchableOpacity
-                key={g}
-                style={[styles.goalChip, goal === g && styles.goalChipActive]}
-                onPress={() => setGoal(g)}
-              >
-                <Text style={[styles.goalChipText, goal === g && styles.goalChipTextActive]}>{g}</Text>
-              </TouchableOpacity>
-            ))}
-          </ScrollView>
         </View>
 
         <View style={styles.sectionHeader}>
           <Text style={styles.sectionTitle}>You might need</Text>
-          <TouchableOpacity onPress={() => Alert.alert("More", "Showing top results for your goal.")}>
-            <Text style={styles.seeMore}>See more</Text>
-          </TouchableOpacity>
         </View>
 
         <ScrollView horizontal showsHorizontalScrollIndicator={false} style={{ marginBottom: 10 }}>
-          {categories.map((c) => (
+          {categoryOptions.map((c) => (
             <TouchableOpacity
               key={c}
               style={[styles.catChip, c === category && styles.catChipActive]}
@@ -247,37 +382,45 @@ export default function App() {
         <View style={styles.grid}>
           {visibleItems.map((item) => (
             <View key={item.id} style={styles.card}>
-              <Text style={styles.itemEmoji}>{item.emoji}</Text>
+              <Text style={styles.itemEmoji}>{productEmoji(item.category, item.name)}</Text>
               <Text style={styles.itemName}>{item.name}</Text>
-              <Text style={styles.itemMeta}>{item.grams} gm. · {item.packCount} {item.unitType}</Text>
-              <Text style={styles.itemPrice}>${item.price.toFixed(2)}</Text>
-              <TouchableOpacity style={styles.plusBtn} onPress={() => addToCart(item.id)}>
-                <Text style={styles.plusBtnText}>+</Text>
-              </TouchableOpacity>
+              <Text style={styles.itemMeta}>{item.packCount} {item.unitType} per pack</Text>
+              <Text style={styles.itemMeta}>Category: {item.category}</Text>
+              <Text style={styles.itemPrice}>${item.unitPriceCad.toFixed(2)} / unit</Text>
+              <Text style={styles.itemMeta}>Pack: ${item.packPriceCad.toFixed(2)} CAD</Text>
+              <View style={styles.qtyWrap}>
+                <TouchableOpacity style={styles.qtyBtn} onPress={() => decreaseQty(item.id)}>
+                  <Text style={styles.qtyBtnText}>-</Text>
+                </TouchableOpacity>
+                <Text style={styles.qtyValue}>{getItemQty(item.id)}</Text>
+                <TouchableOpacity style={styles.qtyBtn} onPress={() => addToCart(item.id)}>
+                  <Text style={styles.qtyBtnText}>+</Text>
+                </TouchableOpacity>
+              </View>
             </View>
           ))}
         </View>
 
         <View style={styles.quickPanel}>
-          <Text style={styles.quickTitle}>What do you need to do grocery shopping for?</Text>
+          <Text style={styles.quickTitle}>What do you need to do?</Text>
           <View style={styles.quickButtons}>
             <TouchableOpacity
               style={[styles.quickButton, styles.quickButtonLeft]}
-              onPress={() => setGoal("Weekly Restock")}
+              onPress={() => setTab("trips")}
             >
-              <Text style={styles.quickButtonText}>Restock Home</Text>
+              <Text style={styles.quickButtonText}>Create Costco Trip</Text>
             </TouchableOpacity>
             <TouchableOpacity
               style={[styles.quickButton, styles.quickButtonRight]}
-              onPress={() => setGoal("Meal Prep")}
+              onPress={() => setTab("trips")}
             >
-              <Text style={styles.quickButtonText}>Meal Prep</Text>
+              <Text style={styles.quickButtonText}>Attach to Trip</Text>
             </TouchableOpacity>
             <TouchableOpacity
               style={[styles.quickButton, styles.quickButtonLeft]}
-              onPress={() => setGoal("Campus Essentials")}
+              onPress={() => setTab("trips")}
             >
-              <Text style={styles.quickButtonText}>Campus Week</Text>
+              <Text style={styles.quickButtonText}>Split Multipacks</Text>
             </TouchableOpacity>
             <TouchableOpacity
               style={[styles.quickButton, styles.quickButtonRight]}
@@ -406,6 +549,12 @@ export default function App() {
   }
 
   function renderPantry() {
+    const visibleRecipes = pantryResult
+      ? showAllRecipes
+        ? pantryResult.suggestedRecipes
+        : pantryResult.suggestedRecipes.slice(0, 5)
+      : [];
+
     return (
       <>
         <Text style={styles.pageTitle}>AI Pantry Assistant</Text>
@@ -425,12 +574,17 @@ export default function App() {
           <View style={styles.resultWrap}>
             <Text style={styles.tripMeta}>Mode: {pantryResult.provider === "api" ? "Gemini API" : "Fallback"}</Text>
             {pantryResult.warning ? <Text style={styles.warnText}>{pantryResult.warning}</Text> : null}
-            {pantryResult.suggestedRecipes.map((recipe) => (
+            {visibleRecipes.map((recipe) => (
               <View key={recipe.title} style={styles.recipeCard}>
                 <Text style={styles.recipeTitle}>{recipe.title}</Text>
                 <Text style={styles.tripMeta}>Missing: {recipe.missingIngredients.join(", ") || "Nothing"}</Text>
               </View>
             ))}
+            {pantryResult.suggestedRecipes.length > 5 ? (
+              <TouchableOpacity style={styles.showMoreBtn} onPress={() => setShowAllRecipes((p) => !p)}>
+                <Text style={styles.showMoreBtnText}>{showAllRecipes ? "Show less" : "Show more"}</Text>
+              </TouchableOpacity>
+            ) : null}
           </View>
         ) : null}
       </>
@@ -499,25 +653,17 @@ const styles = StyleSheet.create({
     borderBottomLeftRadius: 44,
     borderBottomRightRadius: 44
   },
+  searchRow: { flexDirection: "row", alignItems: "center" },
   searchInput: {
     backgroundColor: "#f2f4f4",
     borderRadius: 26,
     paddingHorizontal: 16,
     paddingVertical: 12,
-    color: "#335"
+    color: "#335",
+    flex: 1
   },
   locationLabel: { color: "#d2e7e8", marginTop: 14, fontSize: 15 },
   locationValue: { color: "#c5e89f", fontSize: 30, fontWeight: "800" },
-  goalChip: {
-    backgroundColor: "rgba(255,255,255,0.18)",
-    borderRadius: 20,
-    paddingHorizontal: 12,
-    paddingVertical: 8,
-    marginRight: 8
-  },
-  goalChipActive: { backgroundColor: "#f3da97" },
-  goalChipText: { color: "#e8f6f6", fontWeight: "700" },
-  goalChipTextActive: { color: "#184241" },
   sectionHeader: {
     paddingHorizontal: 14,
     paddingTop: 14,
@@ -527,7 +673,6 @@ const styles = StyleSheet.create({
     alignItems: "center"
   },
   sectionTitle: { fontSize: 38, fontWeight: "900", color: "#0d3b3a" },
-  seeMore: { color: "#b45c33", fontWeight: "700", fontSize: 22 },
   catChip: {
     marginLeft: 14,
     marginBottom: 6,
@@ -557,15 +702,26 @@ const styles = StyleSheet.create({
   itemName: { marginTop: 6, fontSize: 20, fontWeight: "700", color: "#163f3c" },
   itemMeta: { color: "#778a8f", marginTop: 4 },
   itemPrice: { fontSize: 34, fontWeight: "900", color: "#0f3d3b", marginTop: 6 },
-  plusBtn: {
+  qtyWrap: {
     marginTop: 8,
     borderRadius: 12,
     backgroundColor: "#eceee8",
+    flexDirection: "row",
     alignItems: "center",
-    justifyContent: "center",
-    paddingVertical: 2
+    justifyContent: "space-between",
+    paddingVertical: 4,
+    paddingHorizontal: 8
   },
-  plusBtnText: { fontSize: 38, color: "#103f3d", lineHeight: 44 },
+  qtyBtn: {
+    width: 36,
+    height: 36,
+    borderRadius: 10,
+    backgroundColor: "#dfe6e0",
+    alignItems: "center",
+    justifyContent: "center"
+  },
+  qtyBtnText: { fontSize: 24, color: "#103f3d", fontWeight: "800", lineHeight: 26 },
+  qtyValue: { minWidth: 30, textAlign: "center", fontSize: 22, fontWeight: "800", color: "#103f3d" },
   quickPanel: { marginHorizontal: 14, marginTop: 8 },
   quickTitle: { fontSize: 20, fontWeight: "800", color: "#103e3c", marginBottom: 8 },
   quickButtons: { flexDirection: "row", flexWrap: "wrap" },
@@ -721,6 +877,14 @@ const styles = StyleSheet.create({
     borderRadius: 10,
     padding: 10
   },
+  showMoreBtn: {
+    marginTop: 10,
+    backgroundColor: "#eaf4f2",
+    borderRadius: 10,
+    alignItems: "center",
+    paddingVertical: 10
+  },
+  showMoreBtnText: { color: "#0f3d3b", fontWeight: "800" },
   recipeTitle: { color: "#123e3b", fontWeight: "800", fontSize: 16 },
   profileCard: {
     marginHorizontal: 14,

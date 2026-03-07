@@ -1,3 +1,5 @@
+import { costcoProducts } from "./costco-products";
+
 export type FakeUser = {
   id: string;
   name: string;
@@ -9,11 +11,11 @@ export type GroceryItem = {
   id: string;
   name: string;
   category: string;
-  grams: number;
   packCount: number;
   unitType: string;
-  price: number;
-  emoji: string;
+  unitPriceCad: number;
+  packPriceCad: number;
+  pricingNote: string;
 };
 
 export type AttachedOrder = {
@@ -55,17 +57,7 @@ export const fakeUsers: FakeUser[] = [
   { id: "u4", name: "Nina", rating: 4.6, completedTrips: 10 }
 ];
 
-export const groceryItems: GroceryItem[] = [
-  { id: "i1", name: "Beetroot", category: "Fresh", grams: 500, packCount: 1, unitType: "bag", price: 17.29, emoji: "🧅" },
-  { id: "i2", name: "Italian Avocado", category: "Fresh", grams: 450, packCount: 6, unitType: "pieces", price: 14.29, emoji: "🥑" },
-  { id: "i3", name: "Deshi Carrot", category: "Fresh", grams: 1000, packCount: 1, unitType: "bag", price: 27.29, emoji: "🥕" },
-  { id: "i4", name: "Sparkling Water", category: "Drink & Water", grams: 330, packCount: 12, unitType: "cans", price: 12.49, emoji: "🥤" },
-  { id: "i5", name: "Croissant Box", category: "Bakery", grams: 600, packCount: 8, unitType: "pieces", price: 9.99, emoji: "🥐" },
-  { id: "i6", name: "Dairy Milk", category: "Dairy", grams: 1000, packCount: 2, unitType: "bottles", price: 8.49, emoji: "🥛" },
-  { id: "i7", name: "Floor Cleaner", category: "Cleaners", grams: 1000, packCount: 3, unitType: "bottles", price: 11.29, emoji: "🧴" },
-  { id: "i8", name: "Protein Chicken Mix", category: "Meat", grams: 1000, packCount: 4, unitType: "packs", price: 22.1, emoji: "🍖" },
-  { id: "i9", name: "Snack Pack", category: "Sweets", grams: 900, packCount: 18, unitType: "bags", price: 15.8, emoji: "🍪" }
-];
+export const groceryItems: GroceryItem[] = costcoProducts;
 
 export const seededTrips: Trip[] = [
   {
@@ -82,8 +74,8 @@ export const seededTrips: Trip[] = [
         userId: "u2",
         notes: "Can drop at unit 402 after 4pm",
         lines: [
-          { itemId: "i2", claimedUnits: 2 },
-          { itemId: "i5", claimedUnits: 4 }
+          { itemId: "csv_1", claimedUnits: 2 },
+          { itemId: "csv_2", claimedUnits: 4 }
         ]
       },
       {
@@ -91,8 +83,8 @@ export const seededTrips: Trip[] = [
         userId: "u3",
         notes: "Need this for meal prep",
         lines: [
-          { itemId: "i8", claimedUnits: 1 },
-          { itemId: "i4", claimedUnits: 4 }
+          { itemId: "csv_3", claimedUnits: 1 },
+          { itemId: "csv_4", claimedUnits: 4 }
         ]
       }
     ]
@@ -111,8 +103,8 @@ export const seededTrips: Trip[] = [
         userId: "u1",
         notes: "Text me when you arrive",
         lines: [
-          { itemId: "i9", claimedUnits: 6 },
-          { itemId: "i6", claimedUnits: 1 }
+          { itemId: "csv_5", claimedUnits: 6 },
+          { itemId: "csv_6", claimedUnits: 1 }
         ]
       }
     ]
