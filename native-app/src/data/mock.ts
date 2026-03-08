@@ -5,6 +5,9 @@ export type FakeUser = {
   name: string;
   rating: number;
   completedTrips: number;
+  bio?: string;
+  homeLat: number;
+  homeLng: number;
 };
 
 export type GroceryItem = {
@@ -51,10 +54,10 @@ export const communities: Community[] = [
 ];
 
 export const fakeUsers: FakeUser[] = [
-  { id: "u1", name: "Maya", rating: 4.9, completedTrips: 21 },
-  { id: "u2", name: "Jordan", rating: 4.7, completedTrips: 14 },
-  { id: "u3", name: "Arjun", rating: 4.8, completedTrips: 17 },
-  { id: "u4", name: "Nina", rating: 4.6, completedTrips: 10 }
+  { id: "u1", name: "Maya", rating: 4.9, completedTrips: 21, bio: "Bulk split organizer, always on time.", homeLat: 43.4643, homeLng: -80.5204 },
+  { id: "u2", name: "Jordan", rating: 4.7, completedTrips: 14, bio: "Prefers weekend Costco runs.", homeLat: 43.4701, homeLng: -80.5362 },
+  { id: "u3", name: "Arjun", rating: 4.8, completedTrips: 17, bio: "Meal prep heavy orders.", homeLat: 43.4554, homeLng: -80.4982 },
+  { id: "u4", name: "Nina", rating: 4.6, completedTrips: 10, bio: "Campus route specialist.", homeLat: 43.4728, homeLng: -80.5449 }
 ];
 
 export const groceryItems: GroceryItem[] = costcoProducts;
