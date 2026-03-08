@@ -12,12 +12,10 @@ import {
   View
 } from "react-native";
 import { StatusBar } from "expo-status-bar";
-import { Audio } from "expo-av";
 import * as Location from "expo-location";
-import * as FileSystem from "expo-file-system/legacy";
 import DateTimePicker from "@react-native-community/datetimepicker";
 import { communities, fakeUsers, groceryItems, seededTrips, type Trip } from "./src/data/mock";
-import { generatePantrySuggestions } from "./src/lib/pantry";
+import { generatePantrySuggestions, type PantrySuggestion } from "./src/lib/pantry";
 
 type Tab = "shop" | "trips" | "pantry" | "profile";
 
@@ -25,37 +23,6 @@ type CartLine = { itemId: string; claimedUnits: number };
 const QTY_STEP = 0.5;
 
 const currentUserId = "u1";
-const API_BASE_URL =
-  typeof process !== "undefined" ? process.env.EXPO_PUBLIC_API_BASE_URL : undefined;
-
-function normalizeRecipeCount(
-  recipes: Array<{ title: string; missingIngredients: string[] }>,
-  pantryItems: string[]
-) {
-  const starters = [...recipes];
-  const fallbackTitles = [
-    "Quick Pantry Wrap",
-    "Bulk Bowl Special",
-    "Neighborhood Pasta Mix",
-    "Campus Protein Plate",
-    "One-Pan Veggie Dinner",
-    "Simple Soup Combo",
-    "Stir Fry in 20",
-    "Breakfast for Dinner"
-  ];
-
-  let idx = 0;
-  while (starters.length < 8 && idx < fallbackTitles.length) {
-    starters.push({
-      title: fallbackTitles[idx],
-      missingIngredients: pantryItems.length
-        ? ["olive oil", "garlic"].filter((item) => !pantryItems.some((p) => p.includes(item)))
-        : ["olive oil", "garlic", "onion"]
-    });
-    idx += 1;
-  }
-  return starters;
-}
 
 function productEmoji(name: string, category: string) {
   const n = name.toLowerCase();
@@ -112,6 +79,10 @@ function proratedLineTotal(packPriceCad: number, requestedPackQty: number) {
   return Number((packPriceCad * requestedPackQty).toFixed(2));
 }
 
+function toSearchKey(value: string) {
+  return value.toLowerCase().replace(/[^a-z0-9 ]/g, " ").trim();
+}
+
 export default function App() {
   const [tab, setTab] = useState<Tab>("shop");
   const [category, setCategory] = useState("All");
@@ -141,8 +112,9 @@ export default function App() {
   const [transcript, setTranscript] = useState("");
   const [pantryResult, setPantryResult] = useState<Awaited<ReturnType<typeof generatePantrySuggestions>> | null>(null);
   const [showAllRecipes, setShowAllRecipes] = useState(false);
+  const [selectedRecipe, setSelectedRecipe] = useState<PantrySuggestion | null>(null);
+  const [isGeneratingRecipes, setIsGeneratingRecipes] = useState(false);
   const [isRecording, setIsRecording] = useState(false);
-  const [recording, setRecording] = useState<Audio.Recording | null>(null);
 
   const categoryOptions = useMemo(() => {
     const unique = Array.from(new Set(groceryItems.map((item) => item.category)));
@@ -197,80 +169,17 @@ export default function App() {
   }, [activeCommunityId, trips]);
 
   async function startRecording() {
-    try {
-      await Audio.requestPermissionsAsync();
-      await Audio.setAudioModeAsync({
-        allowsRecordingIOS: true,
-        playsInSilentModeIOS: true
-      });
-
-      const rec = new Audio.Recording();
-      await rec.prepareToRecordAsync(Audio.RecordingOptionsPresets.HIGH_QUALITY);
-      await rec.startAsync();
-      setRecording(rec);
-      setIsRecording(true);
-    } catch {
-      Alert.alert("Recording error", "Could not start recording.");
-    }
+    setIsRecording(true);
+    setTab("pantry");
+    Alert.alert(
+      "Voice Shortcut",
+      "Tap the microphone key on your iPhone keyboard in the Pantry text box to dictate items."
+    );
   }
 
   async function stopRecordingAndTranscribe() {
-    if (!recording) return;
-    try {
-      await recording.stopAndUnloadAsync();
-      const uri = recording.getURI();
-      setRecording(null);
-      setIsRecording(false);
-
-      if (!uri) {
-        Alert.alert("Voice input", "No recording file found.");
-        return;
-      }
-
-      const text = await transcribeWithGemini(uri);
-      if (!text) {
-        Alert.alert(
-          "Speech-to-text unavailable",
-          "Could not transcribe audio. Check EXPO_PUBLIC_API_BASE_URL and backend GEMINI_API_KEY."
-        );
-        return;
-      }
-
-      setTranscript(text);
-      setTab("pantry");
-      const ai = await generatePantrySuggestions(text, API_BASE_URL);
-      setPantryResult({
-        ...ai,
-        suggestedRecipes: normalizeRecipeCount(ai.suggestedRecipes, ai.pantryItems)
-      });
-      setShowAllRecipes(false);
-    } catch {
-      Alert.alert("Voice input", "Something went wrong while transcribing.");
-    }
-  }
-  async function transcribeWithGemini(uri: string): Promise<string | null> {
-    if (!API_BASE_URL) return null;
-
-    try {
-      const audioBase64 = await FileSystem.readAsStringAsync(uri, {
-        encoding: FileSystem.EncodingType.Base64
-      });
-
-      const response = await fetch(`${API_BASE_URL}/api/pantry/transcribe`, {
-        method: "POST",
-        headers: { "Content-Type": "application/json" },
-        body: JSON.stringify({
-          audioBase64,
-          mimeType: "audio/m4a"
-        })
-      });
-
-      if (!response.ok) return null;
-      const data = await response.json();
-      return data?.text?.trim() || null;
-    } catch {
-      return null;
-    }
+    setIsRecording(false);
+    setTab("pantry");
   }
 
   function addToCart(itemId: string) {
@@ -307,6 +216,40 @@ export default function App() {
         entry.itemId === itemId ? { ...entry, claimedUnits: next } : entry
       );
     });
+  }
+
+  function parseOrderQtyToPacks(orderQty: string) {
+    const match = orderQty.match(/\d+(\.\d+)?/);
+    if (!match) return QTY_STEP;
+    const n = Number(match[0]);
+    if (!Number.isFinite(n) || n <= 0) return QTY_STEP;
+    return Math.min(10, Math.max(QTY_STEP, roundToHalf(n)));
+  }
+
+  function addRecipeIngredientToCart(name: string, orderQty: string) {
+    const target = toSearchKey(name);
+    const matched = groceryItems.find((item) => {
+      const product = toSearchKey(item.name);
+      return product.includes(target) || target.includes(product);
+    });
+
+    if (!matched) {
+      Alert.alert("Item not found", `${name} is not in the shop catalog yet.`);
+      return;
+    }
+
+    const qtyToAdd = parseOrderQtyToPacks(orderQty);
+    setCart((prev) => {
+      const existing = prev.find((line) => line.itemId === matched.id);
+      if (existing) {
+        const next = Math.min(10, roundToHalf(existing.claimedUnits + qtyToAdd));
+        return prev.map((line) =>
+          line.itemId === matched.id ? { ...line, claimedUnits: next } : line
+        );
+      }
+      return [...prev, { itemId: matched.id, claimedUnits: qtyToAdd }];
+    });
+    Alert.alert("Added to cart", `${name} added (${formatQty(qtyToAdd)} packs).`);
   }
 
   function cartDisplayLines() {
@@ -560,16 +503,19 @@ export default function App() {
   }
 
   async function runPantryAi() {
+    const input = transcript.trim() || "eggs, milk, spinach, rice, pasta, tomato sauce";
     if (!transcript.trim()) {
-      Alert.alert("Pantry AI", "Add pantry items first.");
-      return;
+      setTranscript(input);
     }
-    const res = await generatePantrySuggestions(transcript, API_BASE_URL);
-    setPantryResult({
-      ...res,
-      suggestedRecipes: normalizeRecipeCount(res.suggestedRecipes, res.pantryItems)
-    });
-    setShowAllRecipes(false);
+
+    try {
+      setIsGeneratingRecipes(true);
+      const res = await generatePantrySuggestions(input);
+      setPantryResult(res);
+      setShowAllRecipes(false);
+    } finally {
+      setIsGeneratingRecipes(false);
+    }
   }
 
   function renderShop() {
@@ -587,6 +533,14 @@ export default function App() {
           </View>
           <Text style={styles.locationLabel}>Current Location</Text>
           <Text style={styles.locationValue}>{locationLabel} ↗</Text>
+          <TouchableOpacity
+            style={[styles.voiceBtn, isRecording && styles.voiceBtnActive]}
+            onPress={isRecording ? stopRecordingAndTranscribe : startRecording}
+          >
+            <Text style={styles.voiceBtnText}>
+              {isRecording ? "Stop Recording" : "Start Voice Pantry"}
+            </Text>
+          </TouchableOpacity>
         </View>
 
         <View style={styles.attachPanel}>
@@ -906,7 +860,9 @@ export default function App() {
     return (
       <>
         <Text style={styles.pageTitle}>AI Pantry Assistant</Text>
-        <Text style={styles.tripMeta}>Speak or type pantry inventory and generate recipes.</Text>
+        <Text style={[styles.tripMeta, styles.pantrySubtitle]}>
+          Speak or type pantry inventory and generate recipes.
+        </Text>
         <TextInput
           style={styles.pantryInput}
           multiline
@@ -914,19 +870,20 @@ export default function App() {
           onChangeText={setTranscript}
           placeholder="eggs, milk, spinach, pasta"
         />
-        <TouchableOpacity style={styles.generateBtn} onPress={runPantryAi}>
-          <Text style={styles.generateBtnText}>Generate Recipes</Text>
+        <TouchableOpacity style={styles.generateBtn} onPress={runPantryAi} disabled={isGeneratingRecipes}>
+          <Text style={styles.generateBtnText}>
+            {isGeneratingRecipes ? "Generating..." : "Generate Recipes"}
+          </Text>
         </TouchableOpacity>
 
         {pantryResult ? (
           <View style={styles.resultWrap}>
-            <Text style={styles.tripMeta}>Mode: {pantryResult.provider === "api" ? "Gemini API" : "Fallback"}</Text>
-            {pantryResult.warning ? <Text style={styles.warnText}>{pantryResult.warning}</Text> : null}
             {visibleRecipes.map((recipe) => (
-              <View key={recipe.title} style={styles.recipeCard}>
+              <TouchableOpacity key={recipe.title} style={styles.recipeCard} onPress={() => setSelectedRecipe(recipe)}>
                 <Text style={styles.recipeTitle}>{recipe.title}</Text>
                 <Text style={styles.tripMeta}>Missing: {recipe.missingIngredients.join(", ") || "Nothing"}</Text>
-              </View>
+                <Text style={styles.recipeTapHint}>Tap to view ingredient quantities</Text>
+              </TouchableOpacity>
             ))}
             {pantryResult.suggestedRecipes.length > 5 ? (
               <TouchableOpacity style={styles.showMoreBtn} onPress={() => setShowAllRecipes((p) => !p)}>
@@ -1024,6 +981,34 @@ export default function App() {
           </View>
         </View>
       </Modal>
+
+      <Modal visible={Boolean(selectedRecipe)} animationType="fade" transparent onRequestClose={() => setSelectedRecipe(null)}>
+        <View style={styles.modalBackdrop}>
+          <View style={styles.modalCard}>
+            <View style={styles.modalHeader}>
+              <Text style={styles.modalTitle}>{selectedRecipe?.title ?? "Recipe"}</Text>
+              <TouchableOpacity onPress={() => setSelectedRecipe(null)}>
+                <Text style={styles.modalClose}>Close</Text>
+              </TouchableOpacity>
+            </View>
+            <Text style={styles.modalSummary}>Recommended quantity and grocery order amount</Text>
+            <ScrollView style={{ maxHeight: 380 }}>
+              {selectedRecipe?.ingredientPlan.map((item) => (
+                <TouchableOpacity
+                  key={`${selectedRecipe.title}-${item.name}`}
+                  style={styles.recipeQtyRow}
+                  onPress={() => addRecipeIngredientToCart(item.name, item.orderQty)}
+                >
+                  <Text style={styles.recipeQtyName}>{item.name}</Text>
+                  <Text style={styles.recipeQtyMeta}>Recommended: {item.recommendedQty}</Text>
+                  <Text style={styles.recipeQtyMeta}>Order from grocery: {item.orderQty}</Text>
+                  <Text style={styles.recipeQtyAction}>Tap to add this item to cart</Text>
+                </TouchableOpacity>
+              ))}
+            </ScrollView>
+          </View>
+        </View>
+      </Modal>
     </SafeAreaView>
   );
 }
@@ -1064,6 +1049,22 @@ const styles = StyleSheet.create({
   },
   locationLabel: { color: "#d2e7e8", marginTop: 14, fontSize: 15 },
   locationValue: { color: "#c5e89f", fontSize: 30, fontWeight: "800" },
+  voiceBtn: {
+    marginTop: 12,
+    alignSelf: "flex-start",
+    backgroundColor: "#f2f4f4",
+    borderRadius: 20,
+    paddingHorizontal: 14,
+    paddingVertical: 10,
+  },
+  voiceBtnActive: {
+    backgroundColor: "#ffd3d3",
+  },
+  voiceBtnText: {
+    color: "#143b3a",
+    fontWeight: "800",
+    fontSize: 14,
+  },
   sectionHeader: {
     paddingHorizontal: 14,
     paddingTop: 14,
@@ -1390,6 +1391,7 @@ const styles = StyleSheet.create({
   generateBtnText: { color: "white", fontWeight: "900", fontSize: 16 },
   resultWrap: { marginHorizontal: 14, marginTop: 10 },
   warnText: { color: "#b42318", marginTop: 4 },
+  pantrySubtitle: { marginLeft: 14 },
   recipeCard: {
     marginTop: 8,
     backgroundColor: "#fff",
@@ -1407,6 +1409,18 @@ const styles = StyleSheet.create({
   },
   showMoreBtnText: { color: "#0f3d3b", fontWeight: "800" },
   recipeTitle: { color: "#123e3b", fontWeight: "800", fontSize: 16 },
+  recipeTapHint: { color: "#5f7f7c", marginTop: 6, fontSize: 12, fontWeight: "700" },
+  recipeQtyRow: {
+    borderWidth: 1,
+    borderColor: "#d9e0dd",
+    borderRadius: 12,
+    padding: 10,
+    marginBottom: 8,
+    backgroundColor: "#f8faf9"
+  },
+  recipeQtyName: { color: "#123e3b", fontWeight: "800", fontSize: 15, marginBottom: 4 },
+  recipeQtyMeta: { color: "#355b58", fontSize: 13, marginBottom: 2 },
+  recipeQtyAction: { color: "#0b6b60", fontSize: 12, fontWeight: "800", marginTop: 4 },
   profileCard: {
     marginHorizontal: 14,
     backgroundColor: "#fff",
